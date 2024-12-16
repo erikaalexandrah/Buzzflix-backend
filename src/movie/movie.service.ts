@@ -1,13 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { TmdbService } from '../tmdb/tmdb.service';
-import { DatabaseService } from '../database/database.service';  // Tu servicio de conexión a Neo4j
+import { DatabaseService } from '../database/database.service';  
 import { Session } from 'neo4j-driver';
 
 @Injectable()
 export class MovieService {
   constructor(
     private readonly tmdbService: TmdbService,
-    private readonly databaseService: DatabaseService,  // Inyectar el servicio de Neo4j
+    private readonly databaseService: DatabaseService,  // Se Inyecta el servicio de Neo4j
   ) {}
 
   async getLatestMovies() {
@@ -50,7 +50,7 @@ export class MovieService {
         const movieDetails = await this.tmdbService.getMovieDetails(movie.id);
 
         return {
-          id: movieDetails.id,  // Asegurarse de incluir el `id`
+          id: movieDetails.id,  
           title: movieDetails.title,
           description: movieDetails.overview,
           releaseDate: movieDetails.release_date,
@@ -69,7 +69,7 @@ export class MovieService {
       console.error('Error fetching movies by genre:', error);
       throw new Error('Failed to fetch movies by genre');
     } finally {
-      await session.close();  // Asegurarse de cerrar la sesión después de la consulta
+      await session.close();  
     }
   }
 
@@ -97,7 +97,7 @@ export class MovieService {
           cover: movie.cover_image,
           genre: movie.tags || [],
           trailerUrl: movie.trailer_url || '',
-          actors: movie.cast || [], // Aquí incluimos todos los actores
+          actors: movie.cast || [], 
           classification: movie.age_rating,
           subtitles: movie.subtitles || [],
         };

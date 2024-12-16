@@ -6,9 +6,19 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   
-  // Habilitar CORS
+  const allowedOrigins = [
+    'https://unimet-buzzflix.vercel.app',
+    'http://fscgsoc04cows4c0g8ksoco8.152.53.54.211.sslip.io/',
+  ];
+  
   app.enableCors({
-    origin: 'https://unimet-buzzflix.vercel.app',
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });

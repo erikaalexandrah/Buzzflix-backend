@@ -16,15 +16,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const password = this.configService.get<string>('neo4j.password');
     this.driverInitializedPromise = this.initializeDriver(uri, username, password);
   }
-
+  
   private async initializeDriver(uri: string, username: string, password: string) {
     try {
       this.driver = neo4j.driver(uri, neo4j.auth.basic(username, password));
       console.log('Driver created, testing connection...');
 
-      // Test the connection by running a simple query
       const session = this.driver.session();
-      await session.run('RETURN 1'); // Executes a simple query to test the connection
+      await session.run('RETURN 1'); 
       await session.close();
 
       this.isDriverInitialized = true;
@@ -40,7 +39,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getSession(): Promise<Session> {
-    // Wait for the driver to be initialized before returning a session
     await this.driverInitializedPromise;
 
     if (!this.isDriverInitialized) {
