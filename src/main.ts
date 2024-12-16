@@ -8,7 +8,7 @@ async function bootstrap() {
   
   const allowedOrigins = [
     'https://unimet-buzzflix.vercel.app',
-    'http://fscgsoc04cows4c0g8ksoco8.152.53.54.211.sslip.io/',
+    'http://fscgsoc04cows4c0g8ksoco8.152.53.54.211.sslip.io',
   ];
   
   app.enableCors({
