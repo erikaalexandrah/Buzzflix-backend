@@ -1,73 +1,73 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="200" alt="Nest Logo" /></a>
-</p>
+# Buzzflix backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+## Desarrollo local
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+El backend usa una instancia local de Neo4j ejecutada con Docker Compose.
 
-## Description
+1. Copia `.env.example` como `.env` y completa `TMDB_API_KEY` y `JWT_SECRET`.
+2. Arranca Neo4j y espera a que esté saludable:
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+   ```bash
+   docker compose up -d --wait neo4j
+   ```
 
-## Installation
+3. Arranca el backend:
+
+   ```bash
+   npm run start:dev
+   ```
+
+Neo4j Browser queda disponible en <http://localhost:7474>. La conexión Bolt
+del backend usa `bolt://localhost:7687`. Los datos se conservan en el volumen
+Docker `buzzflix-backend_neo4j_data` aunque se detenga o recree el contenedor.
+
+Para detener los servicios sin borrar los datos:
 
 ```bash
-$ yarn install
+docker compose down
 ```
 
-## Running the app
+Para comprobar su estado:
 
 ```bash
-# development
-$ yarn run start
-
-# watch mode
-$ yarn run start:dev
-
-# production mode
-$ yarn run start:prod
+docker compose ps
 ```
 
-## Test
+## Importar películas desde TMDB
+
+El backend puede poblar Neo4j desde TMDB usando películas ordenadas por fecha de
+estreno, desde las más recientes hacia las más antiguas.
+
+Hay dos trabajos:
+
+- `refresh`: revisa las primeras páginas todos los días para traer novedades.
+- `backfill`: avanza por páginas guardando progreso para ir llenando películas
+  cada vez más antiguas.
+
+Refrescar manualmente las más nuevas:
 
 ```bash
-# unit tests
-$ yarn run test
-
-# e2e tests
-$ yarn run test:e2e
-
-# test coverage
-$ yarn run test:cov
+curl "http://localhost:3000/import/movies/recent/refresh?pages=2"
 ```
 
-## Support
+Importar manualmente un batch histórico:
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+```bash
+curl "http://localhost:3000/import/movies/recent/backfill?pages=5"
+```
 
-## Stay in touch
+Consultar el progreso del backfill:
 
-- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+```bash
+curl "http://localhost:3000/import/movies/recent/status"
+```
 
-## License
+Reiniciar el progreso para empezar otra vez desde las más recientes:
 
-Nest is [MIT licensed](LICENSE).
+```bash
+curl "http://localhost:3000/import/movies/recent/reset"
+```
+
+Además, el cron del backend ejecuta `refresh` todos los días a medianoche y
+`backfill` cada 6 horas. Las cantidades se controlan con
+`RECENT_MOVIES_REFRESH_PAGES` y `RECENT_MOVIES_BACKFILL_PAGES_PER_RUN`.

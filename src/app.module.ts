@@ -1,19 +1,21 @@
-import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { TmdbModule } from './tmdb/tmdb.module';
-import { ConfigModule } from '@nestjs/config';
-import { EnvConfiguration } from './config/env.configuration';
-import { ImportModule } from './import/import.module';
-import { DatabaseModule } from './database/database.module';
-import { MovieModule } from './movie/movie.module';
-import { AuthModule } from './auth/auth.module';
+import { Module } from "@nestjs/common";
+import { AppController } from "./app.controller";
+import { AppService } from "./app.service";
+import { TmdbModule } from "./tmdb/tmdb.module";
+import { ConfigModule } from "@nestjs/config";
+import { EnvConfiguration } from "./config/env.configuration";
+import { ImportModule } from "./import/import.module";
+import { DatabaseModule } from "./database/database.module";
+import { MovieModule } from "./movie/movie.module";
+import { AuthModule } from "./auth/auth.module";
+import { ScheduleModule } from "@nestjs/schedule";
 @Module({
   imports: [
     ConfigModule.forRoot({
       load: [EnvConfiguration],
       isGlobal: true,
     }),
+    ScheduleModule.forRoot(),
     TmdbModule,
     ImportModule,
     DatabaseModule,
