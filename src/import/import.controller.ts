@@ -3,10 +3,18 @@ import {
   DefaultValuePipe,
   Get,
   ParseIntPipe,
+  Post,
   Query,
+  UseGuards,
 } from "@nestjs/common";
 import { ImportService } from "./import.service";
-import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+} from "@nestjs/swagger";
+import { AdminGuard } from "src/auth/guards/admin.guard";
 
 @ApiTags("import") // Categoriza los endpoints bajo la etiqueta "import"
 @Controller("import")
@@ -171,6 +179,26 @@ export class MovieImportController {
   @Get("movies/recent/reset")
   async resetRecentMoviesImportProgress() {
     return await this.movieImportService.resetRecentMoviesImportProgress();
+  }
+
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "[Admin] Accelerate older-movies backfill",
+    description:
+      "Admin-only. Manually triggers the same older-movies backfill batch that the cron runs every 6 hours, so it can be sped up on demand. Continues from the saved page cursor and moves toward older movies. Requires a valid admin JWT.",
+  })
+  @ApiResponse({
+    status: 201,
+    description: "Older-movies backfill batch imported successfully.",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized - missing/invalid JWT." })
+  @ApiResponse({ status: 403, description: "Forbidden - admin access required." })
+  @UseGuards(AdminGuard)
+  @Post("admin/movies/backfill")
+  async adminBackfillOlderMovies(
+    @Query("pages", new DefaultValuePipe(5), ParseIntPipe) pages: number,
+  ) {
+    return await this.movieImportService.importRecentMoviesBackfillBatch(pages);
   }
 
   @ApiOperation({
