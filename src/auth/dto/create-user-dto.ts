@@ -1,5 +1,7 @@
-import { IsString, IsInt, Min, Max, IsEmail, Matches } from 'class-validator';
+import { IsString, IsInt, Min, Max, IsEmail, MinLength, IsIn, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+
+export type UserRole = 'normal' | 'admin';
 
 export class CreateUserDto {
   @ApiProperty({
@@ -10,12 +12,12 @@ export class CreateUserDto {
   username: string;
 
   @ApiProperty({
-    description: 'The password for the user. It must be at least 6 characters long, include at least one uppercase letter, and at least one number.',
-    example: 'P@ssw0rd',
+    description: 'The password for the user. It must be at least 6 characters long.',
+    example: 'mypassword1',
   })
   @IsString()
-  @Matches(/^(?=.*[A-Z])(?=.*\d)[A-Za-z\d]{6,}$/, {
-    message: 'Password must be at least 6 characters long, include at least one uppercase letter, and at least one number',
+  @MinLength(6, {
+    message: 'Password must be at least 6 characters long',
   })
   password: string;
 
@@ -41,4 +43,16 @@ export class CreateUserDto {
   })
   @IsString()
   country: string;
+
+  @ApiProperty({
+    description:
+      'The role of the user. Clients should always send "normal"; the server never grants "admin" through registration.',
+    example: 'normal',
+    required: false,
+    default: 'normal',
+    enum: ['normal', 'admin'],
+  })
+  @IsOptional()
+  @IsIn(['normal', 'admin'])
+  role?: UserRole = 'normal';
 }

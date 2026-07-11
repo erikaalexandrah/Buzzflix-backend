@@ -12,4 +12,10 @@ export class JwtPayload {
     example: 123,
   })
   sub: number;
+
+  @ApiProperty({
+    description: 'The role of the user: "normal" or "admin".',
+    example: 'normal',
+  })
+  role?: string;
 }

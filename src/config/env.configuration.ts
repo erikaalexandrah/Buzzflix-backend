@@ -10,6 +10,10 @@ export const EnvConfiguration = () => ({
     password: process.env.NEO4J_PASSWORD,
   },
   jwt_secret: process.env.JWT_SECRET,
+  admin: {
+    email: process.env.ADMIN_EMAIL,
+    password: process.env.ADMIN_PASSWORD,
+  },
   import: {
     recentMoviesRefreshPages:
       parseInt(process.env.RECENT_MOVIES_REFRESH_PAGES, 10) || 2,
