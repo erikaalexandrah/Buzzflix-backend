@@ -15,5 +15,6 @@ export const EnvConfiguration = () => ({
       parseInt(process.env.RECENT_MOVIES_REFRESH_PAGES, 10) || 2,
     recentMoviesBackfillPagesPerRun:
       parseInt(process.env.RECENT_MOVIES_BACKFILL_PAGES_PER_RUN, 10) || 5,
+    seedOnEmpty: process.env.SEED_ON_EMPTY !== "false",
   },
 });

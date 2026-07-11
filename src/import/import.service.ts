@@ -516,4 +516,31 @@ export class ImportService {
       await session.close();
     }
   }
+
+  // Devuelve true si no hay ninguna película cargada en Neo4j
+  async isDatabaseEmpty(): Promise<boolean> {
+    const session = await this.neo4jService.getSession();
+
+    try {
+      const result = await session.run(
+        "MATCH (m:Movie) RETURN count(m) AS count",
+      );
+      const count = result.records[0]?.get("count");
+      const total =
+        count && typeof count.toNumber === "function"
+          ? count.toNumber()
+          : Number(count ?? 0);
+      return total === 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  // Siembra inicial: géneros + películas populares (equivale a /import/all)
+  async seedInitialData(): Promise<void> {
+    console.log("Seeding initial data (genres + popular movies)...");
+    await this.importGenres();
+    await this.importMovies();
+    console.log("Initial data seeding completed");
+  }
 }
