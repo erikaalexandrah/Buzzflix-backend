@@ -1,14 +1,160 @@
 import { Injectable } from '@nestjs/common';
 import { TmdbService } from '../tmdb/tmdb.service';
 import { DatabaseService } from '../database/database.service';  
-import { Session } from 'neo4j-driver';
+import neo4j, { Session } from 'neo4j-driver';
+import { Genre } from './entities/genre.entity';
+import { LANDING_DEFAULT_LIMIT } from './dto/landing-query.dto';
+
+type LandingMovie = {
+  id: number;
+  title: string;
+  description: string;
+  releaseDate: string;
+  rating: number;
+  cover: string;
+  genre: string;
+  trailerUrl: string;
+  actors: string[];
+  classification: string;
+  subtitles: string;
+};
+
+type LandingResponse = {
+  latest: LandingMovie[];
+  genres: Array<{ name: string; movies: LandingMovie[] }>;
+};
 
 @Injectable()
 export class MovieService {
+  private readonly landingCache = new Map<
+    string,
+    { expiresAt: number; value: LandingResponse }
+  >();
+  private readonly landingCacheTtlMs = 5 * 60 * 1000;
+
   constructor(
     private readonly tmdbService: TmdbService,
     private readonly databaseService: DatabaseService,  // Se Inyecta el servicio de Neo4j
   ) {}
+
+  async getLanding(
+    requestedGenres: string[] = Object.values(Genre),
+    limit = LANDING_DEFAULT_LIMIT,
+  ): Promise<LandingResponse> {
+    const genres = requestedGenres ?? Object.values(Genre);
+    const cacheKey = JSON.stringify({ genres, limit });
+    const startedAt = performance.now();
+    const cached = this.landingCache.get(cacheKey);
+
+    if (cached && cached.expiresAt > Date.now()) {
+      this.logLandingMetrics(startedAt, 0, performance.now() - startedAt, true);
+      return cached.value;
+    }
+    if (cached) this.landingCache.delete(cacheKey);
+
+    const session: Session = await this.databaseService.getSession();
+    const neo4jStartedAt = performance.now();
+    let neo4jMs = 0;
+
+    try {
+      const result = await session.run(
+        `CALL {
+           MATCH (m:Movie)
+           WHERE m.release_date IS NOT NULL
+           WITH m ORDER BY m.release_date DESC LIMIT $limit
+           OPTIONAL MATCH (m)-[:BELONGS_TO]->(latestGenre:Genre)
+           WITH m, collect(latestGenre.name) AS genres
+           RETURN collect({ movie: m, genres: genres }) AS latest
+         }
+         CALL {
+           UNWIND range(0, size($genres) - 1) AS genreIndex
+           WITH genreIndex, $genres[genreIndex] AS genreName
+           OPTIONAL MATCH (genre:Genre {name: genreName})<-[:BELONGS_TO]-(m:Movie)
+           WITH genreIndex, genreName, m
+           ORDER BY m.release_date DESC
+           WITH genreIndex, genreName, collect(m)[..$limit] AS selectedMovies
+           UNWIND CASE WHEN size(selectedMovies) = 0 THEN [null] ELSE selectedMovies END AS movie
+           OPTIONAL MATCH (movie)-[:BELONGS_TO]->(movieGenre:Genre)
+           WITH genreIndex, genreName, movie, collect(movieGenre.name) AS movieGenres
+           WITH genreIndex, genreName,
+             collect({ movie: movie, genres: movieGenres }) AS movieEntries
+           ORDER BY genreIndex
+           RETURN collect({
+             name: genreName,
+             movies: CASE WHEN movieEntries[0].movie IS NULL THEN [] ELSE movieEntries END
+           }) AS genreGroups
+         }
+         RETURN latest, genreGroups`,
+        { genres, limit: neo4j.int(limit) },
+      );
+      neo4jMs = performance.now() - neo4jStartedAt;
+
+      const transformStartedAt = performance.now();
+      const record = result.records[0];
+      const response: LandingResponse = {
+        latest: (record?.get('latest') || []).map((entry) =>
+          this.toLandingMovie(entry.movie.properties, entry.genres),
+        ),
+        genres: (record?.get('genreGroups') || []).map((group) => ({
+          name: group.name,
+          movies: group.movies.map((entry) =>
+            this.toLandingMovie(entry.movie.properties, entry.genres),
+          ),
+        })),
+      };
+      JSON.stringify(response);
+      const transformMs = performance.now() - transformStartedAt;
+
+      this.landingCache.set(cacheKey, {
+        expiresAt: Date.now() + this.landingCacheTtlMs,
+        value: response,
+      });
+      this.logLandingMetrics(startedAt, neo4jMs, transformMs, false);
+      return response;
+    } catch (error) {
+      neo4jMs = performance.now() - neo4jStartedAt;
+      this.logLandingMetrics(startedAt, neo4jMs, 0, false);
+      console.error('Error fetching landing movies:', error);
+      throw new Error('Failed to fetch landing movies');
+    } finally {
+      await session.close();
+    }
+  }
+
+  private toLandingMovie(movie: any, genres: string[]): LandingMovie {
+    return {
+      id: movie.id,
+      title: movie.title,
+      description: movie.overview,
+      releaseDate: movie.release_date,
+      rating: movie.score,
+      cover: movie.cover_image,
+      genre: (genres || []).join(', '),
+      trailerUrl: movie.trailer_url || '',
+      actors: movie.cast || [],
+      classification: movie.age_rating,
+      subtitles: Array.isArray(movie.subtitles)
+        ? movie.subtitles.join(', ')
+        : movie.subtitles || '',
+    };
+  }
+
+  private logLandingMetrics(
+    startedAt: number,
+    neo4jMs: number,
+    transformMs: number,
+    cacheHit: boolean,
+  ) {
+    console.log(
+      JSON.stringify({
+        event: 'movie.landing.performance',
+        totalMs: Number((performance.now() - startedAt).toFixed(2)),
+        neo4jMs: Number(neo4jMs.toFixed(2)),
+        transformAndSerializationMs: Number(transformMs.toFixed(2)),
+        cache: cacheHit ? 'hit' : 'miss',
+      }),
+    );
+  }
 
   async getLatestMovies() {
     try {

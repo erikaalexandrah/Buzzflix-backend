@@ -37,6 +37,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       this.driver = neo4j.driver(uri, neo4j.auth.basic(username, password));
       await this.driver.verifyConnectivity();
 
+      const session = this.driver.session();
+      try {
+        await session.run(
+          "CREATE INDEX genre_name IF NOT EXISTS FOR (g:Genre) ON (g.name)",
+        );
+        await session.run(
+          "CREATE INDEX movie_release_date IF NOT EXISTS FOR (m:Movie) ON (m.release_date)",
+        );
+      } finally {
+        await session.close();
+      }
+
       this.isDriverInitialized = true;
       console.log("Connected to Neo4j successfully");
     } catch (error) {

@@ -4,11 +4,32 @@ import { MovieService } from './movie.service';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiBearerAuth, ApiBody, ApiParam } from '@nestjs/swagger';
 import { Genre } from './entities/genre.entity';
+import { LandingQueryDto } from './dto/landing-query.dto';
 
 @ApiTags('movie')
 @Controller('movie')
 export class MovieController {
   constructor(private readonly movieService: MovieService) {}
+
+  @ApiOperation({
+    summary: 'Get all data required by the landing page',
+    description:
+      'Returns latest movies and ordered genre rails from Neo4j in one request. Does not call TMDB.',
+  })
+  @ApiQuery({
+    name: 'genres',
+    required: false,
+    description: 'Comma-separated genre names. The response preserves this order.',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    schema: { type: 'integer', default: 20, maximum: 50, minimum: 1 },
+  })
+  @Get('landing')
+  async getLanding(@Query() query: LandingQueryDto) {
+    return await this.movieService.getLanding(query.genres, query.limit);
+  }
 
   // GET latest
   @ApiOperation({
