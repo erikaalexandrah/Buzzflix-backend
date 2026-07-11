@@ -10,13 +10,16 @@ async function bootstrap() {
 
   const allowedOrigins = [
     "https://unimet-buzzflix.vercel.app",
-    "https://buzzflix.titranx.com/",
-    "http://buzzflix.titranx.com/",
+    "https://buzzflix.titranx.com",
+    "http://buzzflix.titranx.com",
   ];
 
   app.enableCors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+      // El header Origin del navegador nunca trae slash final; normalizamos
+      // por si alguna entrada de la lista lo tuviera.
+      const normalized = origin?.replace(/\/$/, "");
+      if (!origin || allowedOrigins.includes(normalized)) {
         callback(null, true);
       } else {
         callback(new Error("Not allowed by CORS"));
