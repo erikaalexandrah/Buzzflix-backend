@@ -36,9 +36,9 @@ export class ImportService {
     await session.run(
       `
       MERGE (m:Movie {id: $id})
-      ON CREATE SET 
-        m.title = $title, 
-        m.overview = $overview, 
+      ON CREATE SET
+        m.title = $title,
+        m.overview = $overview,
         m.release_date = $release_date,
         m.duration = $duration,
         m.director = $director,
@@ -47,12 +47,13 @@ export class ImportService {
         m.subtitles = $subtitles,
         m.age_rating = $age_rating,
         m.score = $score,
+        m.popularity = $popularity,
         m.cover_image = $cover_image,
         m.trailer_url = $trailer_url,
         m.tags = $tags
       ON MATCH SET
-        m.title = $title, 
-        m.overview = $overview, 
+        m.title = $title,
+        m.overview = $overview,
         m.release_date = $release_date,
         m.duration = $duration,
         m.director = $director,
@@ -61,6 +62,7 @@ export class ImportService {
         m.subtitles = $subtitles,
         m.age_rating = $age_rating,
         m.score = $score,
+        m.popularity = $popularity,
         m.cover_image = $cover_image,
         m.trailer_url = $trailer_url,
         m.tags = $tags
@@ -85,6 +87,7 @@ export class ImportService {
           movieDetails.release_dates?.results[0]?.release_dates[0]
             ?.certification || "NR",
         score: movieDetails.vote_average || 0,
+        popularity: movie.popularity ?? movieDetails.popularity ?? 0,
         cover_image: movieDetails.poster_path
           ? `https://image.tmdb.org/t/p/w500${movieDetails.poster_path}`
           : null,

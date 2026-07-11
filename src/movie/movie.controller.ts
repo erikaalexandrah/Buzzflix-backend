@@ -50,6 +50,24 @@ export class MovieController {
     return await this.movieService.getLatestMovies();
   }
 
+  // GET featured (most popular movie, served from Neo4j)
+  @ApiOperation({
+    summary: 'Get the featured (most popular) movie',
+    description:
+      'Returns the single most popular movie stored in the database, ordered by TMDB popularity (rating as tiebreaker). Reads only from Neo4j, without calling TMDB, so it is fast enough for a homepage hero/banner.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Successfully retrieved the featured movie.',
+    type: Movie,
+  })
+  @ApiResponse({ status: 404, description: 'No movies found.' })
+  @ApiResponse({ status: 500, description: 'Internal server error.' })
+  @Get('featured')
+  async getFeaturedMovie() {
+    return await this.movieService.getFeaturedMovie();
+  }
+
   // GET movies by genre
   @ApiOperation({
     summary: 'Get movies by genre',

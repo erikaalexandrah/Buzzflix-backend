@@ -33,6 +33,51 @@ export class MovieService {
   }
   
 
+  // Devuelve la película más popular (por popularity, con score como
+  // desempate) leyendo SOLO de Neo4j, sin llamar a TMDB. Ideal para el
+  // banner/hero de portada.
+  async getFeaturedMovie() {
+    const session: Session = await this.databaseService.getSession();
+    try {
+      const result = await session.run(
+        `MATCH (m:Movie)
+         OPTIONAL MATCH (m)-[:BELONGS_TO]->(g:Genre)
+         WITH m, collect(g.name) AS genres
+         RETURN m, genres
+         ORDER BY coalesce(m.popularity, 0) DESC, coalesce(m.score, 0) DESC
+         LIMIT 1`,
+      );
+
+      if (result.records.length === 0) {
+        return null;
+      }
+
+      const movie = result.records[0].get('m').properties;
+      const genres: string[] = result.records[0].get('genres') || [];
+
+      return {
+        id: movie.id,
+        title: movie.title,
+        description: movie.overview,
+        releaseDate: movie.release_date,
+        rating: movie.score,
+        cover: movie.cover_image,
+        genre: genres.join(', '),
+        trailerUrl: movie.trailer_url,
+        actors: movie.cast || [],
+        classification: movie.age_rating,
+        subtitles: Array.isArray(movie.subtitles)
+          ? movie.subtitles.join(', ')
+          : movie.subtitles || '',
+      };
+    } catch (error) {
+      console.error('Error fetching featured movie:', error);
+      throw new Error('Failed to fetch featured movie');
+    } finally {
+      await session.close();
+    }
+  }
+
   async getMoviesByGenre(genre: string) {
     const session: Session = await this.databaseService.getSession();
     try {
