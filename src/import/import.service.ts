@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { TmdbService } from "../tmdb/tmdb.service";
 import { DatabaseService } from "../database/database.service";
-import { Session } from "neo4j-driver";
+import neo4j, { Session } from "neo4j-driver";
 
 @Injectable()
 export class ImportService {
@@ -363,7 +363,10 @@ export class ImportService {
   }
 
   async backfillVoteCounts(batchSize: number = 50) {
-    const safeBatchSize = Math.max(1, Math.min(batchSize, 100));
+    const safeBatchSize = Math.min(
+      Math.max(1, Math.trunc(Number(batchSize) || 50)),
+      100,
+    );
     const session = await this.neo4jService.getSession();
 
     try {
@@ -374,7 +377,7 @@ export class ImportService {
          ORDER BY coalesce(m.voteCountBackfillAttemptedAt, datetime('1970-01-01')) ASC,
                   m.id ASC
          LIMIT $batchSize`,
-        { batchSize: safeBatchSize },
+        { batchSize: neo4j.int(safeBatchSize) },
       );
       const movieIds = candidates.records.map((record) => record.get("id"));
 

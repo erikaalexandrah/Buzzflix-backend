@@ -1,4 +1,5 @@
 import { ImportService } from './import.service';
+import neo4j from 'neo4j-driver';
 
 describe('ImportService movie upsert', () => {
   it('persists TMDB vote_count when a movie is created or updated', async () => {
@@ -117,7 +118,88 @@ describe('ImportService vote-count backfill', () => {
       }),
     );
     expect(result.failures[0]).toEqual({ id: 2, error: 'TMDB unavailable' });
-    expect(run.mock.calls[0][1].batchSize).toBe(100);
+    expect(neo4j.isInt(run.mock.calls[0][1].batchSize)).toBe(true);
+    expect(run.mock.calls[0][1].batchSize.toNumber()).toBe(100);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [50, 50],
+    [50.9, 50],
+    [0.9, 1],
+    [0, 50],
+    [Number.NaN, 50],
+    ['invalid' as any, 50],
+    [101, 100],
+  ])('sends batchSize %p to LIMIT as Neo4j Integer %p', async (input, expected) => {
+    const close = jest.fn().mockResolvedValue(undefined);
+    const run = jest
+      .fn()
+      .mockResolvedValueOnce({ records: [] })
+      .mockResolvedValueOnce({
+        records: [
+          {
+            get: (key: string) =>
+              ({ total: 0, completed: 0, remaining: 0 })[key],
+          },
+        ],
+      });
+    const service = new ImportService({} as any, {
+      getSession: jest.fn().mockResolvedValue({ run, close }),
+    } as any);
+
+    await service.backfillVoteCounts(input as number);
+
+    const limitParameter = run.mock.calls[0][1].batchSize;
+    expect(neo4j.isInt(limitParameter)).toBe(true);
+    expect(limitParameter.toNumber()).toBe(expected);
+  });
+
+  it('processes consecutive batches with an Integer LIMIT each time', async () => {
+    const createSession = (id: number, completed: number, remaining: number) => {
+      const close = jest.fn().mockResolvedValue(undefined);
+      const run = jest
+        .fn()
+        .mockResolvedValueOnce({ records: [{ get: () => id }] })
+        .mockResolvedValueOnce({ records: [] })
+        .mockResolvedValueOnce({ records: [] })
+        .mockResolvedValueOnce({
+          records: [
+            {
+              get: (key: string) =>
+                ({ total: 2, completed, remaining })[key],
+            },
+          ],
+        });
+      return { run, close };
+    };
+    const firstSession = createSession(1, 1, 1);
+    const secondSession = createSession(2, 2, 0);
+    const getSession = jest
+      .fn()
+      .mockResolvedValueOnce(firstSession)
+      .mockResolvedValueOnce(secondSession);
+    const tmdbService = {
+      getMovieDetails: jest.fn().mockResolvedValue({
+        vote_count: 100,
+        vote_average: 7,
+        popularity: 50,
+      }),
+    };
+    const service = new ImportService(tmdbService as any, {
+      getSession,
+    } as any);
+
+    const first = await service.backfillVoteCounts(50);
+    const second = await service.backfillVoteCounts(50);
+
+    expect(first).toEqual(expect.objectContaining({ remaining: 1, complete: false }));
+    expect(second).toEqual(expect.objectContaining({ remaining: 0, complete: true }));
+    for (const session of [firstSession, secondSession]) {
+      const parameter = session.run.mock.calls[0][1].batchSize;
+      expect(neo4j.isInt(parameter)).toBe(true);
+      expect(parameter.toNumber()).toBe(50);
+      expect(session.close).toHaveBeenCalledTimes(1);
+    }
   });
 });
