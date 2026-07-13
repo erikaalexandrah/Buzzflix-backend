@@ -7,6 +7,8 @@ const node = (id: number) => ({
     overview: 'Overview',
     release_date: '2026-01-01',
     score: 8,
+    vote_count: 100,
+    popularity: 50,
     cover_image: 'cover.jpg',
     trailer_url: '',
     cast: [],
@@ -72,6 +74,9 @@ describe('MovieService.getLanding', () => {
     expect(response.genres[2].movies).toHaveLength(2);
     expect(run).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0][0]).toContain('coalesce(m.vote_count, 0) >= 50');
+    expect(run.mock.calls[0][1].today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(response.latest[0].voteCount).toBe(100);
   });
 
   it('returns a cached response without another Neo4j session/query', async () => {

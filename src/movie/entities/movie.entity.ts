@@ -34,6 +34,13 @@ export class Movie {
   rating: number;
 
   @ApiProperty({
+    description: 'Number of TMDB votes supporting the rating',
+    example: 36167,
+    required: false,
+  })
+  voteCount?: number;
+
+  @ApiProperty({
     description: 'URL to the cover image of the movie',
     example: 'https://image.tmdb.org/t/p/w500/inception-cover.jpg',
   })
@@ -114,4 +121,3 @@ export class SearchMoviesResponse {
     })
     actorMovies: Movie[];
   }
-  

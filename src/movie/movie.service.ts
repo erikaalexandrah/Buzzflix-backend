@@ -11,6 +11,7 @@ type LandingMovie = {
   description: string;
   releaseDate: string;
   rating: number;
+  voteCount: number;
   cover: string;
   genre: string;
   trailerUrl: string;
@@ -43,6 +44,7 @@ export class MovieService {
   ): Promise<LandingResponse> {
     const genres = requestedGenres ?? Object.values(Genre);
     const cacheKey = JSON.stringify({ genres, limit });
+    const today = new Date().toISOString().slice(0, 10);
     const startedAt = performance.now();
     const cached = this.landingCache.get(cacheKey);
 
@@ -60,8 +62,22 @@ export class MovieService {
       const result = await session.run(
         `CALL {
            MATCH (m:Movie)
-           WHERE m.release_date IS NOT NULL
-           WITH m ORDER BY m.release_date DESC LIMIT $limit
+           WHERE m.release_date >= '1900-01-01'
+             AND m.release_date <= $today
+             AND m.cover_image IS NOT NULL
+           WITH m
+           ORDER BY CASE
+             WHEN coalesce(m.vote_count, 0) >= 50 AND coalesce(m.score, 0) >= 6 THEN 0
+             WHEN coalesce(m.vote_count, 0) >= 10 AND coalesce(m.score, 0) >= 5 THEN 1
+             WHEN m.vote_count IS NULL
+               AND coalesce(m.score, 0) >= 6
+               AND coalesce(m.popularity, 0) >= 10 THEN 1
+             ELSE 2
+           END,
+           m.release_date DESC,
+           coalesce(m.popularity, 0) DESC,
+           coalesce(m.score, 0) DESC
+           LIMIT $limit
            OPTIONAL MATCH (m)-[:BELONGS_TO]->(latestGenre:Genre)
            WITH m, collect(latestGenre.name) AS genres
            RETURN collect({ movie: m, genres: genres }) AS latest
@@ -70,8 +86,23 @@ export class MovieService {
            UNWIND range(0, size($genres) - 1) AS genreIndex
            WITH genreIndex, $genres[genreIndex] AS genreName
            OPTIONAL MATCH (genre:Genre {name: genreName})<-[:BELONGS_TO]-(m:Movie)
+           WHERE m IS NULL OR (
+             m.release_date >= '1900-01-01'
+             AND m.release_date <= $today
+             AND m.cover_image IS NOT NULL
+           )
            WITH genreIndex, genreName, m
-           ORDER BY m.release_date DESC
+           ORDER BY CASE
+             WHEN coalesce(m.vote_count, 0) >= 50 AND coalesce(m.score, 0) >= 6 THEN 0
+             WHEN coalesce(m.vote_count, 0) >= 10 AND coalesce(m.score, 0) >= 5 THEN 1
+             WHEN m.vote_count IS NULL
+               AND coalesce(m.score, 0) >= 6
+               AND coalesce(m.popularity, 0) >= 10 THEN 1
+             ELSE 2
+           END,
+           m.release_date DESC,
+           coalesce(m.popularity, 0) DESC,
+           coalesce(m.score, 0) DESC
            WITH genreIndex, genreName, collect(m)[..$limit] AS selectedMovies
            UNWIND CASE WHEN size(selectedMovies) = 0 THEN [null] ELSE selectedMovies END AS movie
            OPTIONAL MATCH (movie)-[:BELONGS_TO]->(movieGenre:Genre)
@@ -85,7 +116,7 @@ export class MovieService {
            }) AS genreGroups
          }
          RETURN latest, genreGroups`,
-        { genres, limit: neo4j.int(limit) },
+        { genres, limit: neo4j.int(limit), today },
       );
       neo4jMs = performance.now() - neo4jStartedAt;
 
@@ -128,6 +159,7 @@ export class MovieService {
       description: movie.overview,
       releaseDate: movie.release_date,
       rating: movie.score,
+      voteCount: movie.vote_count || 0,
       cover: movie.cover_image,
       genre: (genres || []).join(', '),
       trailerUrl: movie.trailer_url || '',

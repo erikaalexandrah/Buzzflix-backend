@@ -6,6 +6,7 @@ import { Session } from "neo4j-driver";
 @Injectable()
 export class ImportService {
   private readonly recentMoviesBackfillStateKey = "recent-movies-backfill";
+  private readonly voteCountBackfillConcurrency = 5;
 
   constructor(
     private readonly tmdbService: TmdbService,
@@ -47,6 +48,7 @@ export class ImportService {
         m.subtitles = $subtitles,
         m.age_rating = $age_rating,
         m.score = $score,
+        m.vote_count = $vote_count,
         m.popularity = $popularity,
         m.cover_image = $cover_image,
         m.trailer_url = $trailer_url,
@@ -62,6 +64,7 @@ export class ImportService {
         m.subtitles = $subtitles,
         m.age_rating = $age_rating,
         m.score = $score,
+        m.vote_count = $vote_count,
         m.popularity = $popularity,
         m.cover_image = $cover_image,
         m.trailer_url = $trailer_url,
@@ -87,6 +90,7 @@ export class ImportService {
           movieDetails.release_dates?.results[0]?.release_dates[0]
             ?.certification || "NR",
         score: movieDetails.vote_average || 0,
+        vote_count: movieDetails.vote_count ?? movie.vote_count ?? 0,
         popularity: movie.popularity ?? movieDetails.popularity ?? 0,
         cover_image: movieDetails.poster_path
           ? `https://image.tmdb.org/t/p/w500${movieDetails.poster_path}`
@@ -347,6 +351,130 @@ export class ImportService {
     } finally {
       await session.close();
     }
+  }
+
+  async getVoteCountBackfillStatus() {
+    const session = await this.neo4jService.getSession();
+    try {
+      return await this.getVoteCountStatusWithSession(session);
+    } finally {
+      await session.close();
+    }
+  }
+
+  async backfillVoteCounts(batchSize: number = 50) {
+    const safeBatchSize = Math.max(1, Math.min(batchSize, 100));
+    const session = await this.neo4jService.getSession();
+
+    try {
+      const candidates = await session.run(
+        `MATCH (m:Movie)
+         WHERE m.vote_count IS NULL
+         RETURN m.id AS id
+         ORDER BY coalesce(m.voteCountBackfillAttemptedAt, datetime('1970-01-01')) ASC,
+                  m.id ASC
+         LIMIT $batchSize`,
+        { batchSize: safeBatchSize },
+      );
+      const movieIds = candidates.records.map((record) => record.get("id"));
+
+      if (movieIds.length === 0) {
+        const status = await this.getVoteCountStatusWithSession(session);
+        return {
+          processed: 0,
+          updated: 0,
+          failed: 0,
+          failures: [],
+          ...status,
+        };
+      }
+
+      await session.run(
+        `MATCH (m:Movie)
+         WHERE m.id IN $movieIds
+         SET m.voteCountBackfillAttemptedAt = datetime()`,
+        { movieIds },
+      );
+
+      const failures: Array<{ id: number; error: string }> = [];
+      let updated = 0;
+
+      for (
+        let index = 0;
+        index < movieIds.length;
+        index += this.voteCountBackfillConcurrency
+      ) {
+        const chunk = movieIds.slice(
+          index,
+          index + this.voteCountBackfillConcurrency,
+        );
+        const results = await Promise.all(
+          chunk.map(async (id) => {
+            try {
+              const details = await this.tmdbService.getMovieDetails(id);
+              return {
+                id,
+                voteCount: details.vote_count ?? 0,
+                score: details.vote_average ?? 0,
+                popularity: details.popularity ?? 0,
+              };
+            } catch (error) {
+              failures.push({
+                id: Number(id),
+                error: error instanceof Error ? error.message : String(error),
+              });
+              return null;
+            }
+          }),
+        );
+        const successfulUpdates = results.filter(Boolean);
+        if (successfulUpdates.length > 0) {
+          await session.run(
+            `UNWIND $updates AS update
+             MATCH (m:Movie {id: update.id})
+             SET m.vote_count = update.voteCount,
+                 m.score = update.score,
+                 m.popularity = update.popularity,
+                 m.voteCountUpdatedAt = datetime()
+             REMOVE m.voteCountBackfillAttemptedAt`,
+            { updates: successfulUpdates },
+          );
+          updated += successfulUpdates.length;
+        }
+      }
+
+      const status = await this.getVoteCountStatusWithSession(session);
+      return {
+        processed: movieIds.length,
+        updated,
+        failed: failures.length,
+        failures,
+        ...status,
+      };
+    } finally {
+      await session.close();
+    }
+  }
+
+  private async getVoteCountStatusWithSession(session: Session) {
+    const result = await session.run(
+      `MATCH (m:Movie)
+       RETURN count(m) AS total,
+              count(m.vote_count) AS completed,
+              count(m) - count(m.vote_count) AS remaining`,
+    );
+    const record = result.records[0];
+    const total = Number(record?.get("total") || 0);
+    const completed = Number(record?.get("completed") || 0);
+    const remaining = Number(record?.get("remaining") || 0);
+
+    return {
+      total,
+      completed,
+      remaining,
+      percentage: total === 0 ? 100 : Number(((completed / total) * 100).toFixed(2)),
+      complete: remaining === 0,
+    };
   }
 
   private async ensureMovieConstraints(session: Session) {

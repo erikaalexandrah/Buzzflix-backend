@@ -201,6 +201,39 @@ export class MovieImportController {
     return await this.movieImportService.importRecentMoviesBackfillBatch(pages);
   }
 
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "[Admin] Get vote-count backfill status",
+    description:
+      "Returns progress for existing Neo4j movies whose TMDB vote_count has not been populated yet.",
+  })
+  @ApiResponse({ status: 200, description: "Vote-count progress returned." })
+  @ApiResponse({ status: 401, description: "Unauthorized - missing/invalid JWT." })
+  @ApiResponse({ status: 403, description: "Forbidden - admin access required." })
+  @UseGuards(AdminGuard)
+  @Get("admin/movies/vote-counts/status")
+  async getVoteCountBackfillStatus() {
+    return await this.movieImportService.getVoteCountBackfillStatus();
+  }
+
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "[Admin] Backfill TMDB vote counts",
+    description:
+      "Processes the next batch of existing movies without vote_count. TMDB calls run with bounded concurrency and failed movies remain pending for retry.",
+  })
+  @ApiResponse({ status: 201, description: "Vote-count batch processed." })
+  @ApiResponse({ status: 401, description: "Unauthorized - missing/invalid JWT." })
+  @ApiResponse({ status: 403, description: "Forbidden - admin access required." })
+  @UseGuards(AdminGuard)
+  @Post("admin/movies/vote-counts/backfill")
+  async backfillVoteCounts(
+    @Query("batchSize", new DefaultValuePipe(50), ParseIntPipe)
+    batchSize: number,
+  ) {
+    return await this.movieImportService.backfillVoteCounts(batchSize);
+  }
+
   @ApiOperation({
     summary: "Import actors",
     description:
