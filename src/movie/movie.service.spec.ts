@@ -235,6 +235,39 @@ describe('MovieService.getLanding', () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it('invalidates the user landing cache after changing favorites', async () => {
+    // La query MERGE de favoritos devuelve una película encontrada.
+    const originalRun = run.getMockImplementation();
+    run.mockImplementation((query: string, params: any) => {
+      if (query.includes('MERGE') || query.includes('DELETE r')) {
+        return Promise.resolve({ records: [{ get: () => ({}) }] });
+      }
+      return originalRun(query, params);
+    });
+
+    const countBaseQueries = () =>
+      run.mock.calls.filter(([q]) => q.includes('genreGroups')).length;
+
+    // Primer landing del usuario: se cachea.
+    const first = await service.getLanding(['Comedy'], 2, 'kevin');
+    expect(countBaseQueries()).toBe(1);
+
+    // Sin cambios: se sirve desde caché (no hay nueva query base).
+    await service.getLanding(['Comedy'], 2, 'kevin');
+    expect(countBaseQueries()).toBe(1);
+
+    // Al dar like, se invalida la caché del usuario.
+    await service.addMovieToFavorites('kevin', '5');
+    const afterLike = await service.getLanding(['Comedy'], 2, 'kevin');
+    expect(countBaseQueries()).toBe(2);
+    expect(afterLike).not.toBe(first);
+
+    // Quitar de favoritos también invalida.
+    await service.removeMovieFromFavorites('kevin', '5');
+    await service.getLanding(['Comedy'], 2, 'kevin');
+    expect(countBaseQueries()).toBe(3);
+  });
+
   it('closes the session and reports a stable error when Neo4j fails', async () => {
     run.mockRejectedValueOnce(new Error('Neo4j unavailable'));
 

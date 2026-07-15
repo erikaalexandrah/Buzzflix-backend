@@ -231,6 +231,21 @@ export class MovieService {
     return coverImage.replace('/w500/', `/${LANDING_COVER_SIZE}/`);
   }
 
+  // Invalida las entradas de caché del landing pertenecientes a un usuario,
+  // para que sus sugerencias reflejen de inmediato un cambio en favoritos.
+  // Cada clave es JSON.stringify({ genres, limit, user }).
+  private invalidateUserLandingCache(username: string) {
+    for (const key of this.landingCache.keys()) {
+      try {
+        if (JSON.parse(key).user === username) {
+          this.landingCache.delete(key);
+        }
+      } catch {
+        // Clave con formato inesperado: se ignora.
+      }
+    }
+  }
+
   // Construye los rails de sugerencias para un usuario autenticado:
   //  - "Porque te gustó X": por cada favorito semilla, películas que comparten
   //    actores/género con él (priorizando actores compartidos).
@@ -595,7 +610,8 @@ export class MovieService {
       if (result.records.length === 0) {
         throw new Error('Movie or User not found');
       }
-  
+
+      this.invalidateUserLandingCache(username);
       return { message: 'Movie added to favorites' };
     } catch (error) {
       console.error('Error adding movie to favorites:', error);
@@ -620,7 +636,8 @@ export class MovieService {
       if (result.records.length === 0) {
         throw new Error('Movie or User not found');
       }
-  
+
+      this.invalidateUserLandingCache(username);
       return { message: 'Movie removed from favorites' };
     } catch (error) {
       console.error('Error removing movie from favorites:', error);
