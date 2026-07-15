@@ -5,6 +5,20 @@ import neo4j, { Session } from 'neo4j-driver';
 import { Genre } from './entities/genre.entity';
 import { LANDING_DEFAULT_LIMIT } from './dto/landing-query.dto';
 
+// Se sobre-consulta por género para que, tras deduplicar globalmente,
+// cada rail conserve hasta `limit` películas sin quedar vacío.
+const LANDING_CANDIDATE_MULTIPLIER = 4;
+
+// Tamaño de póster para los thumbnails del landing (más liviano que w500).
+const LANDING_COVER_SIZE = 'w185';
+
+// Cuántos favoritos se usan como "semilla" para generar rails del tipo
+// "Porque te gustó X".
+const LANDING_SUGGESTION_SEEDS = 3;
+
+// Cada cuántos rails de género se intercala uno de sugerencias.
+const LANDING_INTERLEAVE_EVERY = 2;
+
 type LandingMovie = {
   id: number;
   title: string;
@@ -20,9 +34,15 @@ type LandingMovie = {
   subtitles: string;
 };
 
+type LandingRail = {
+  name: string;
+  type: 'genre' | 'suggestion';
+  movies: LandingMovie[];
+};
+
 type LandingResponse = {
   latest: LandingMovie[];
-  genres: Array<{ name: string; movies: LandingMovie[] }>;
+  genres: LandingRail[];
 };
 
 @Injectable()
@@ -41,9 +61,12 @@ export class MovieService {
   async getLanding(
     requestedGenres: string[] = Object.values(Genre),
     limit = LANDING_DEFAULT_LIMIT,
+    username?: string,
   ): Promise<LandingResponse> {
     const genres = requestedGenres ?? Object.values(Genre);
-    const cacheKey = JSON.stringify({ genres, limit });
+    // El caché se segmenta por usuario: los usuarios anónimos comparten
+    // entrada, cada usuario autenticado tiene la suya con sus sugerencias.
+    const cacheKey = JSON.stringify({ genres, limit, user: username ?? null });
     const today = new Date().toISOString().slice(0, 10);
     const startedAt = performance.now();
     const cached = this.landingCache.get(cacheKey);
@@ -103,7 +126,7 @@ export class MovieService {
            m.release_date DESC,
            coalesce(m.popularity, 0) DESC,
            coalesce(m.score, 0) DESC
-           WITH genreIndex, genreName, collect(m)[..$limit] AS selectedMovies
+           WITH genreIndex, genreName, collect(m)[..$candidateLimit] AS selectedMovies
            UNWIND CASE WHEN size(selectedMovies) = 0 THEN [null] ELSE selectedMovies END AS movie
            OPTIONAL MATCH (movie)-[:BELONGS_TO]->(movieGenre:Genre)
            WITH genreIndex, genreName, movie, collect(movieGenre.name) AS movieGenres
@@ -116,23 +139,52 @@ export class MovieService {
            }) AS genreGroups
          }
          RETURN latest, genreGroups`,
-        { genres, limit: neo4j.int(limit), today },
+        {
+          genres,
+          limit: neo4j.int(limit),
+          candidateLimit: neo4j.int(limit * LANDING_CANDIDATE_MULTIPLIER),
+          today,
+        },
       );
       neo4jMs = performance.now() - neo4jStartedAt;
 
       const transformStartedAt = performance.now();
       const record = result.records[0];
-      const response: LandingResponse = {
-        latest: (record?.get('latest') || []).map((entry) =>
-          this.toLandingMovie(entry.movie.properties, entry.genres),
-        ),
-        genres: (record?.get('genreGroups') || []).map((group) => ({
-          name: group.name,
-          movies: group.movies.map((entry) =>
-            this.toLandingMovie(entry.movie.properties, entry.genres),
-          ),
-        })),
-      };
+
+      // Deduplicación global: cada película aparece una sola vez en todo el
+      // landing. `latest` tiene prioridad; luego cada película se queda en el
+      // primer género donde aparezca, recortando cada rail a `limit`.
+      const seen = new Set<LandingMovie['id']>();
+
+      const latest = (record?.get('latest') || [])
+        .map((entry) => this.toLandingMovie(entry.movie.properties, entry.genres))
+        .filter((movie) => {
+          if (seen.has(movie.id)) return false;
+          seen.add(movie.id);
+          return true;
+        });
+
+      const genreGroups = (record?.get('genreGroups') || []).map((group) => {
+        const movies: LandingMovie[] = [];
+        for (const entry of group.movies) {
+          if (movies.length >= limit) break;
+          const movie = this.toLandingMovie(entry.movie.properties, entry.genres);
+          if (seen.has(movie.id)) continue;
+          seen.add(movie.id);
+          movies.push(movie);
+        }
+        return { name: group.name, type: 'genre' as const, movies };
+      });
+
+      // Sugerencias personalizadas: solo para usuarios autenticados que tengan
+      // favoritos. Se deduplican contra lo ya mostrado y se intercalan entre
+      // los rails de género.
+      const suggestionRails = username
+        ? await this.buildSuggestionRails(session, username, limit, today, seen)
+        : [];
+      const rails = this.interleaveRails(genreGroups, suggestionRails);
+
+      const response: LandingResponse = { latest, genres: rails };
       JSON.stringify(response);
       const transformMs = performance.now() - transformStartedAt;
 
@@ -160,7 +212,7 @@ export class MovieService {
       releaseDate: movie.release_date,
       rating: movie.score,
       voteCount: movie.vote_count || 0,
-      cover: movie.cover_image,
+      cover: this.toLandingCover(movie.cover_image),
       genre: (genres || []).join(', '),
       trailerUrl: movie.trailer_url || '',
       actors: movie.cast || [],
@@ -169,6 +221,149 @@ export class MovieService {
         ? movie.subtitles.join(', ')
         : movie.subtitles || '',
     };
+  }
+
+  // Las portadas se guardan como URL fija en w500. Para los thumbnails del
+  // landing reescribimos el segmento de tamaño a uno más liviano (w185),
+  // sin necesidad de migrar los datos existentes.
+  private toLandingCover(coverImage: string | null | undefined): string {
+    if (!coverImage) return '';
+    return coverImage.replace('/w500/', `/${LANDING_COVER_SIZE}/`);
+  }
+
+  // Construye los rails de sugerencias para un usuario autenticado:
+  //  - "Porque te gustó X": por cada favorito semilla, películas que comparten
+  //    actores/género con él (priorizando actores compartidos).
+  //  - "Otros usuarios también disfrutaron": filtrado colaborativo simple sobre
+  //    quienes comparten favoritos con el usuario.
+  // Devuelve [] si el usuario no tiene favoritos. Deduplica contra `seen` (lo
+  // ya mostrado en latest/géneros) y entre los propios rails de sugerencias.
+  private async buildSuggestionRails(
+    session: Session,
+    username: string,
+    limit: number,
+    today: string,
+    seen: Set<LandingMovie['id']>,
+  ): Promise<LandingRail[]> {
+    const params = {
+      username,
+      today,
+      seedCount: neo4j.int(LANDING_SUGGESTION_SEEDS),
+      candidateLimit: neo4j.int(limit * LANDING_CANDIDATE_MULTIPLIER),
+    };
+
+    const [becauseYouLiked, collaborative] = await Promise.all([
+      session.run(
+        `MATCH (u:User {username: $username})-[:FAVORITES]->(fav:Movie)
+         WITH u, fav
+         ORDER BY coalesce(fav.popularity, 0) DESC, coalesce(fav.score, 0) DESC
+         LIMIT $seedCount
+         CALL {
+           WITH u, fav
+           MATCH (fav)-[:BELONGS_TO]->(:Genre)<-[:BELONGS_TO]-(rec:Movie)
+           WHERE rec.id <> fav.id
+             AND rec.cover_image IS NOT NULL
+             AND rec.release_date <= $today
+             AND NOT EXISTS { (u)-[:FAVORITES]->(rec) }
+           OPTIONAL MATCH (fav)<-[:APPEARS_IN]-(a:Actor)-[:APPEARS_IN]->(rec)
+           WITH rec, count(DISTINCT a) AS sharedActors
+           ORDER BY sharedActors DESC,
+             coalesce(rec.score, 0) DESC,
+             coalesce(rec.popularity, 0) DESC
+           LIMIT $candidateLimit
+           RETURN collect({
+             movie: rec,
+             genres: [(rec)-[:BELONGS_TO]->(g:Genre) | g.name]
+           }) AS movies
+         }
+         RETURN fav.title AS seedTitle, movies`,
+        params,
+      ),
+      session.run(
+        `MATCH (u:User {username: $username})-[:FAVORITES]->(:Movie)<-[:FAVORITES]-(other:User)
+         WHERE other <> u
+         MATCH (other)-[:FAVORITES]->(rec:Movie)
+         WHERE rec.cover_image IS NOT NULL
+           AND rec.release_date <= $today
+           AND NOT EXISTS { (u)-[:FAVORITES]->(rec) }
+         WITH rec, count(DISTINCT other) AS overlap
+         ORDER BY overlap DESC,
+           coalesce(rec.score, 0) DESC,
+           coalesce(rec.popularity, 0) DESC
+         LIMIT $candidateLimit
+         RETURN collect({
+           movie: rec,
+           genres: [(rec)-[:BELONGS_TO]->(g:Genre) | g.name]
+         }) AS movies`,
+        params,
+      ),
+    ]);
+
+    const rails: LandingRail[] = [];
+
+    for (const record of becauseYouLiked.records) {
+      rails.push({
+        name: `Porque te gustó ${record.get('seedTitle')}`,
+        type: 'suggestion',
+        movies: this.dedupeRailMovies(record.get('movies'), limit, seen),
+      });
+    }
+
+    const collaborativeMovies = this.dedupeRailMovies(
+      collaborative.records[0]?.get('movies') || [],
+      limit,
+      seen,
+    );
+    if (collaborativeMovies.length > 0) {
+      rails.push({
+        name: 'Otros usuarios también disfrutaron',
+        type: 'suggestion',
+        movies: collaborativeMovies,
+      });
+    }
+
+    // Descartamos rails que quedaron vacíos tras deduplicar.
+    return rails.filter((rail) => rail.movies.length > 0);
+  }
+
+  // Mapea las entradas de un rail a LandingMovie, deduplicando contra `seen`
+  // (mutándolo) y recortando a `limit`.
+  private dedupeRailMovies(
+    entries: Array<{ movie: any; genres: string[] }>,
+    limit: number,
+    seen: Set<LandingMovie['id']>,
+  ): LandingMovie[] {
+    const movies: LandingMovie[] = [];
+    for (const entry of entries) {
+      if (movies.length >= limit) break;
+      if (!entry?.movie) continue;
+      const movie = this.toLandingMovie(entry.movie.properties, entry.genres);
+      if (seen.has(movie.id)) continue;
+      seen.add(movie.id);
+      movies.push(movie);
+    }
+    return movies;
+  }
+
+  // Intercala los rails de sugerencias entre los de género: uno de sugerencias
+  // cada LANDING_INTERLEAVE_EVERY rails de género. Las sugerencias sobrantes se
+  // añaden al final.
+  private interleaveRails(
+    genreRails: LandingRail[],
+    suggestionRails: LandingRail[],
+  ): LandingRail[] {
+    if (suggestionRails.length === 0) return genreRails;
+
+    const result: LandingRail[] = [];
+    const pending = [...suggestionRails];
+    genreRails.forEach((rail, index) => {
+      result.push(rail);
+      if ((index + 1) % LANDING_INTERLEAVE_EVERY === 0 && pending.length > 0) {
+        result.push(pending.shift());
+      }
+    });
+    result.push(...pending);
+    return result;
   }
 
   private logLandingMetrics(

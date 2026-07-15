@@ -5,6 +5,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiBearerAuth, ApiBody, ApiParam } from '@nestjs/swagger';
 import { Genre } from './entities/genre.entity';
 import { LandingQueryDto } from './dto/landing-query.dto';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt.guard';
 
 @ApiTags('movie')
 @Controller('movie')
@@ -26,9 +27,18 @@ export class MovieController {
     required: false,
     schema: { type: 'integer', default: 20, maximum: 50, minimum: 1 },
   })
+  @ApiBearerAuth()
+  @UseGuards(OptionalJwtAuthGuard)
   @Get('landing')
-  async getLanding(@Query() query: LandingQueryDto) {
-    return await this.movieService.getLanding(query.genres, query.limit);
+  async getLanding(@Query() query: LandingQueryDto, @Request() req) {
+    // Autenticación opcional: con token válido se añaden carruseles de
+    // sugerencias basados en los favoritos del usuario; sin token, no.
+    const username = req.user?.username;
+    return await this.movieService.getLanding(
+      query.genres,
+      query.limit,
+      username,
+    );
   }
 
   // GET latest
